@@ -1,0 +1,21 @@
+name: Deploy production
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Tag/imagem previamente homologada
+        required: true
+
+permissions:
+  contents: read
+
+environment: production
+jobs:
+  deployment-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment is infrastructure-specific
+        run: |
+          echo "Conecte este job ao registry e host gerenciados pela Vemari."
+          echo "Tag aprovada: ${{ inputs.image_tag }}"
+          echo "Não faça deploy direto de código não homologado."

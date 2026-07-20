@@ -1,0 +1,538 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MARKETING_MANAGER
+  SUPERVISOR
+  ATTENDANT
+  READ_ONLY
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ConsentStatus {
+  UNKNOWN
+  OPTED_IN
+  OPTED_OUT
+  BLOCKED
+}
+
+enum TemplateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAUSED
+  DISABLED
+}
+
+enum TemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+  UNKNOWN
+}
+
+enum CampaignStatus {
+  DRAFT
+  VALIDATING
+  SCHEDULED
+  PROCESSING
+  PAUSED
+  COMPLETED
+  CANCELED
+  FAILED
+}
+
+enum CampaignRunStatus {
+  PREPARING
+  PROCESSING
+  PAUSED
+  COMPLETED
+  CANCELED
+  FAILED
+}
+
+enum RecipientStatus {
+  PENDING
+  QUEUED
+  SUBMITTED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  CANCELED
+  SUPPRESSED
+}
+
+enum ConversationStatus {
+  UNASSIGNED
+  WAITING
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+  INTERNAL
+  SYSTEM
+}
+
+enum MessageType {
+  TEXT
+  TEMPLATE
+  IMAGE
+  DOCUMENT
+  AUDIO
+  VIDEO
+  LOCATION
+  INTERACTIVE
+  INTERNAL_NOTE
+  SYSTEM_EVENT
+  UNKNOWN
+}
+
+enum MessageStatus {
+  PENDING
+  SUBMITTED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+}
+
+enum AssignmentAction {
+  ASSIGNED
+  TRANSFERRED
+  UNASSIGNED
+  CLOSED
+  REOPENED
+}
+
+enum AuditResult {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  DUPLICATE
+}
+
+model Organization {
+  id             String   @id @default(uuid())
+  name           String
+  slug           String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  users          User[]
+  contacts       Contact[]
+  segments       Segment[]
+  templates      WhatsAppTemplate[]
+  campaigns      Campaign[]
+  conversations  Conversation[]
+  messages       Message[]
+  quickReplies   QuickReply[]
+  auditLogs      AuditLog[]
+  webhookEvents  WebhookEvent[]
+  pricingRules   PricingRule[]
+}
+
+model User {
+  id                  String      @id @default(uuid())
+  organizationId      String
+  email               String
+  name                String
+  passwordHash        String
+  role                 Role
+  status               UserStatus  @default(ACTIVE)
+  failedLoginAttempts Int         @default(0)
+  lockedUntil          DateTime?
+  lastLoginAt          DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sessions             Session[]
+  createdContacts      Contact[]    @relation("ContactCreatedBy")
+  consentRecords       ConsentRecord[] @relation("ConsentCreatedBy")
+  createdCampaigns     Campaign[]   @relation("CampaignCreatedBy")
+  assignedConversations Conversation[] @relation("ConversationAssignedTo")
+  sentMessages         Message[]    @relation("MessageSender")
+  assignmentFrom       ConversationAssignment[] @relation("AssignmentFrom")
+  assignmentTo         ConversationAssignment[] @relation("AssignmentTo")
+  assignmentPerformed ConversationAssignment[] @relation("AssignmentPerformedBy")
+  auditLogs            AuditLog[]   @relation("AuditActor")
+
+  @@unique([organizationId, email])
+  @@index([organizationId, role, status])
+}
+
+model Session {
+  id               String   @id @default(uuid())
+  userId           String
+  refreshTokenHash String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  ipAddress        String?
+  userAgent        String?
+  createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model Contact {
+  id              String        @id @default(uuid())
+  organizationId  String
+  name            String
+  phoneE164       String
+  email           String?
+  marketingStatus ConsentStatus @default(UNKNOWN)
+  source          String?
+  customFields    Json?
+  createdByUserId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy       User?         @relation("ContactCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  consentRecords  ConsentRecord[]
+  suppressions    SuppressionEntry[]
+  recipients      CampaignRecipient[]
+  conversations   Conversation[]
+  messages        Message[]
+  tags            ContactTag[]
+
+  @@unique([organizationId, phoneE164])
+  @@index([organizationId, marketingStatus, deletedAt])
+}
+
+model ConsentRecord {
+  id              String        @id @default(uuid())
+  organizationId  String
+  contactId       String
+  status          ConsentStatus
+  purpose         String
+  channel         String
+  source          String
+  evidence        String?
+  termVersion     String?
+  grantedAt       DateTime?
+  revokedAt       DateTime?
+  createdByUserId String?
+  ipAddress       String?
+  createdAt       DateTime      @default(now())
+  contact         Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  createdBy       User?         @relation("ConsentCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, contactId, createdAt])
+}
+
+model SuppressionEntry {
+  id              String   @id @default(uuid())
+  organizationId  String
+  contactId       String
+  reason          String
+  source          String
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  liftedAt        DateTime?
+  liftedByUserId  String?
+  contact         Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, contactId, liftedAt])
+}
+
+model Tag {
+  id             String      @id @default(uuid())
+  organizationId String
+  name           String
+  createdAt      DateTime    @default(now())
+  contacts       ContactTag[]
+
+  @@unique([organizationId, name])
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+}
+
+model Segment {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  criteria       Json
+  createdByUserId String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns      Campaign[]
+
+  @@unique([organizationId, name])
+}
+
+model WhatsAppTemplate {
+  id             String           @id @default(uuid())
+  organizationId String
+  metaTemplateId String
+  name           String
+  language       String
+  category       TemplateCategory
+  status         TemplateStatus
+  components     Json
+  qualityRating  String?
+  lastSyncedAt   DateTime
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns      Campaign[]
+
+  @@unique([organizationId, metaTemplateId])
+  @@unique([organizationId, name, language])
+  @@index([organizationId, category, status])
+}
+
+model Campaign {
+  id                 String         @id @default(uuid())
+  organizationId     String
+  name               String
+  status             CampaignStatus @default(DRAFT)
+  templateId         String
+  segmentId          String?
+  templateParameters Json?
+  scheduledAt        DateTime?
+  createdByUserId    String
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  organization       Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template           WhatsAppTemplate @relation(fields: [templateId], references: [id])
+  segment            Segment?       @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  createdBy          User           @relation("CampaignCreatedBy", fields: [createdByUserId], references: [id])
+  runs               CampaignRun[]
+  conversations      Conversation[]
+
+  @@index([organizationId, status, createdAt])
+}
+
+model CampaignRun {
+  id                 String            @id @default(uuid())
+  campaignId         String
+  status             CampaignRunStatus @default(PREPARING)
+  idempotencyKey     String            @unique
+  totalRecipients    Int               @default(0)
+  submittedCount     Int               @default(0)
+  sentCount          Int               @default(0)
+  deliveredCount     Int               @default(0)
+  readCount          Int               @default(0)
+  failedCount        Int               @default(0)
+  suppressedCount    Int               @default(0)
+  estimatedCost      Decimal           @default(0) @db.Decimal(12, 4)
+  confirmedCost      Decimal           @default(0) @db.Decimal(12, 4)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  campaign           Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  recipients         CampaignRecipient[]
+
+  @@index([campaignId, status])
+}
+
+model CampaignRecipient {
+  id             String          @id @default(uuid())
+  campaignRunId  String
+  contactId      String
+  status         RecipientStatus @default(PENDING)
+  metaMessageId  String?         @unique
+  errorCode      String?
+  errorMessage   String?
+  estimatedCost  Decimal         @default(0) @db.Decimal(12, 4)
+  confirmedCost  Decimal         @default(0) @db.Decimal(12, 4)
+  submittedAt    DateTime?
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  failedAt       DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  campaignRun    CampaignRun     @relation(fields: [campaignRunId], references: [id], onDelete: Cascade)
+  contact        Contact         @relation(fields: [contactId], references: [id])
+  message        Message?
+
+  @@unique([campaignRunId, contactId])
+  @@index([campaignRunId, status])
+}
+
+model Conversation {
+  id               String             @id @default(uuid())
+  organizationId   String
+  contactId        String
+  status           ConversationStatus @default(UNASSIGNED)
+  assignedUserId   String?
+  sourceCampaignId String?
+  priority         Int                @default(0)
+  unreadCount      Int                @default(0)
+  lastMessageAt    DateTime?
+  lastInboundAt    DateTime?
+  version          Int                @default(1)
+  closedAt         DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact          Contact            @relation(fields: [contactId], references: [id])
+  assignedUser     User?              @relation("ConversationAssignedTo", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  sourceCampaign   Campaign?          @relation(fields: [sourceCampaignId], references: [id], onDelete: SetNull)
+  messages         Message[]
+  assignments      ConversationAssignment[]
+
+  @@index([organizationId, status, assignedUserId, lastMessageAt])
+}
+
+model Message {
+  id                  String           @id @default(uuid())
+  organizationId      String
+  conversationId      String
+  contactId           String
+  campaignRecipientId String?          @unique
+  metaMessageId       String?          @unique
+  direction           MessageDirection
+  type                MessageType
+  status              MessageStatus
+  senderUserId        String?
+  content             String?
+  payload             Json?
+  submittedAt         DateTime?
+  sentAt              DateTime?
+  deliveredAt         DateTime?
+  readAt              DateTime?
+  failedAt            DateTime?
+  errorCode           String?
+  errorMessage        String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  organization        Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversation        Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  contact             Contact          @relation(fields: [contactId], references: [id])
+  sender              User?            @relation("MessageSender", fields: [senderUserId], references: [id], onDelete: SetNull)
+  campaignRecipient   CampaignRecipient? @relation(fields: [campaignRecipientId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([organizationId, status, createdAt])
+}
+
+model ConversationAssignment {
+  id                String           @id @default(uuid())
+  conversationId    String
+  action            AssignmentAction
+  fromUserId        String?
+  toUserId          String?
+  performedByUserId String
+  note              String?
+  createdAt         DateTime         @default(now())
+  conversation      Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  fromUser          User?            @relation("AssignmentFrom", fields: [fromUserId], references: [id], onDelete: SetNull)
+  toUser            User?            @relation("AssignmentTo", fields: [toUserId], references: [id], onDelete: SetNull)
+  performedBy       User             @relation("AssignmentPerformedBy", fields: [performedByUserId], references: [id])
+
+  @@index([conversationId, createdAt])
+}
+
+model QuickReply {
+  id             String       @id @default(uuid())
+  organizationId String
+  title          String
+  shortcut       String
+  content        String
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, shortcut])
+}
+
+model WebhookEvent {
+  id             String        @id @default(uuid())
+  organizationId String
+  provider       String
+  eventKey       String        @unique
+  payload        Json
+  signatureValid Boolean
+  status         WebhookStatus @default(RECEIVED)
+  errorMessage   String?
+  receivedAt     DateTime      @default(now())
+  processedAt    DateTime?
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status, receivedAt])
+}
+
+model AuditLog {
+  id             String      @id @default(uuid())
+  organizationId String
+  actorUserId    String?
+  actorEmail     String?
+  actorRole      Role?
+  action         String
+  resourceType   String
+  resourceId     String?
+  result         AuditResult
+  previousState  Json?
+  newState       Json?
+  reason         String?
+  requestId      String?
+  correlationId  String?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+  retentionUntil DateTime
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor          User?        @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, actorUserId, createdAt])
+  @@index([organizationId, action, resourceType])
+}
+
+model PricingRule {
+  id              String       @id @default(uuid())
+  organizationId  String
+  countryCode     String
+  currency        String
+  category        TemplateCategory
+  volumeTierStart Int          @default(0)
+  volumeTierEnd   Int?
+  unitPrice       Decimal      @db.Decimal(12, 6)
+  effectiveFrom   DateTime
+  effectiveUntil  DateTime?
+  sourceReference String
+  createdAt       DateTime     @default(now())
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, countryCode, category, effectiveFrom])
+}

@@ -1,0 +1,25 @@
+{$APP_DOMAIN:localhost} {
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+
+  @api path /api/*
+  reverse_proxy @api api:3000
+
+  @socket path /socket.io/*
+  reverse_proxy @socket api:3000
+
+  reverse_proxy web:80
+
+  log {
+    output stdout
+    format json
+  }
+}

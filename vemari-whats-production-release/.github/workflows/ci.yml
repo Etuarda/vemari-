@@ -1,0 +1,60 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: vemari_test
+          POSTGRES_USER: vemari
+          POSTGRES_PASSWORD: test-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vemari -d vemari_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://vemari:test-password@localhost:5432/vemari_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+      APP_URL: http://localhost:3000
+      WEB_URL: http://localhost:5173
+      CORS_ORIGINS: http://localhost:5173
+      VEMARI_ORGANIZATION_SLUG: vemari
+      JWT_ACCESS_SECRET: test-secret-with-more-than-thirty-two-characters
+      DATA_ENCRYPTION_KEY_BASE64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      META_GRAPH_API_VERSION: v25.0
+      META_USE_MARKETING_MESSAGES_API: "false"
+      PROMETHEUS_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate
+      - run: npm run prisma:migrate:deploy
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      - name: Build containers
+        run: |
+          docker build -f infra/docker/Dockerfile.node -t vemari-node:${{ github.sha }} .
+          docker build -f infra/docker/Dockerfile.web -t vemari-web:${{ github.sha }} .

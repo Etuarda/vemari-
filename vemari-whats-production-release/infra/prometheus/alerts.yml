@@ -1,0 +1,23 @@
+groups:
+  - name: vemari-platform
+    rules:
+      - alert: VemariApiDown
+        expr: up{job="vemari-api"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "API da Vemari indisponível"
+
+      - alert: VemariWorkerDown
+        expr: up{job="vemari-worker"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Workers da Vemari indisponíveis"
+
+      - alert: HighHttpErrorRate
+        expr: sum(rate(vemari_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(vemari_http_requests_total[5m])), 1) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Taxa elevada de erros HTTP 5xx"
