@@ -17,8 +17,15 @@ enum Role {
 }
 
 enum UserStatus {
+  INVITED
   ACTIVE
-  DISABLED
+  SUSPENDED
+  REMOVED
+}
+
+enum InvitationType {
+  ACCOUNT_ACTIVATION
+  PASSWORD_RESET
 }
 
 enum ConsentStatus {
@@ -162,7 +169,7 @@ model User {
   organizationId      String
   email               String
   name                String
-  passwordHash        String
+  passwordHash        String?
   role                 Role
   status               UserStatus  @default(ACTIVE)
   failedLoginAttempts Int         @default(0)
@@ -181,9 +188,30 @@ model User {
   assignmentTo         ConversationAssignment[] @relation("AssignmentTo")
   assignmentPerformed ConversationAssignment[] @relation("AssignmentPerformedBy")
   auditLogs            AuditLog[]   @relation("AuditActor")
+  invitations          UserInvitation[] @relation("InvitedUser")
+  createdInvitations   UserInvitation[] @relation("InvitationCreator")
 
   @@unique([organizationId, email])
   @@index([organizationId, role, status])
+}
+
+model UserInvitation {
+  id             String         @id @default(uuid())
+  organizationId String
+  userId         String
+  type           InvitationType @default(ACCOUNT_ACTIVATION)
+  tokenHash      String         @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  revokedAt      DateTime?
+  createdById    String
+  createdAt      DateTime       @default(now())
+  user           User           @relation("InvitedUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy      User           @relation("InvitationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@index([organizationId, createdAt])
 }
 
 model Session {

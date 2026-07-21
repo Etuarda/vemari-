@@ -9,10 +9,6 @@ export class CreateUserDto {
   @MinLength(2)
   name!: string;
 
-  @IsString()
-  @MinLength(8)
-  password!: string;
-
   @IsEnum(Role)
   role!: Role;
 }
@@ -30,10 +26,4 @@ export class UpdateUserDto {
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
-}
-
-export class ResetPasswordDto {
-  @IsString()
-  @MinLength(8)
-  password!: string;
 }

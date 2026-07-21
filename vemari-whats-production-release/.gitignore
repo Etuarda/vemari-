@@ -12,3 +12,6 @@ playwright-report/
 test-results/
 backups/
 prisma/dev.db
+
+# Credenciais exclusivamente locais; nunca versionar.
+CREDENCIAIS_LOCAIS.md

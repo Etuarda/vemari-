@@ -1,19 +1,19 @@
 import {
-  ConflictException,
+  BadRequestException,
   Injectable,
   UnauthorizedException,
   ForbiddenException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { AuditResult, Role, UserStatus } from '@prisma/client';
+import { AuditResult, InvitationType, UserStatus } from '@prisma/client';
 import argon2 from 'argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { Role as ContractRole } from '@vemari/contracts';
 import type { AccessTokenPayload, AuthenticatedUser } from '@vemari/contracts';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import type { RegisterDto } from './auth.dto';
+import { hashInvitationToken } from '../../shared/invitations';
 
 export type AuthRequestMetadata = {
   ipAddress?: string;
@@ -31,48 +31,86 @@ export class AuthService {
     private readonly audit: AuditService,
   ) {}
 
-  async register(dto: RegisterDto, metadata: AuthRequestMetadata) {
-    if (!this.config.get<boolean>('PUBLIC_REGISTRATION_ENABLED', true)) {
-      throw new ForbiddenException('Novos cadastros estão temporariamente desabilitados.');
-    }
-
-    const organization = await this.prisma.organization.findUnique({
-      where: { slug: this.config.getOrThrow<string>('VEMARI_ORGANIZATION_SLUG') },
-    });
-    if (!organization) throw new ForbiddenException('Organização não configurada.');
-
-    const email = dto.email.trim().toLowerCase();
-    const existing = await this.prisma.user.findUnique({
-      where: { organizationId_email: { organizationId: organization.id, email } },
-      select: { id: true },
-    });
-    if (existing) throw new ConflictException('Já existe um cadastro com este e-mail.');
-
-    const user = await this.prisma.user.create({
-      data: {
-        organizationId: organization.id,
-        name: dto.name.trim(),
-        email,
-        passwordHash: await argon2.hash(dto.password, { type: argon2.argon2id }),
-        role: Role.READ_ONLY,
-        status: UserStatus.ACTIVE,
+  async validateInvitation(token: string, type: keyof typeof InvitationType) {
+    const invitation = await this.findValidInvitation(token, InvitationType[type]);
+    if (!invitation) return { valid: false };
+    return {
+      valid: true,
+      user: {
+        name: invitation.user.name,
+        email: invitation.user.email,
+        role: invitation.user.role,
       },
-      select: { id: true, name: true, email: true, role: true, status: true, createdAt: true },
+      expiresAt: invitation.expiresAt,
+    };
+  }
+
+  async useInvitation(
+    token: string,
+    password: string,
+    passwordConfirmation: string,
+    typeKey: keyof typeof InvitationType,
+    metadata: AuthRequestMetadata,
+  ) {
+    if (password !== passwordConfirmation)
+      throw new BadRequestException('As senhas não coincidem.');
+    const type = InvitationType[typeKey];
+    const invitation = await this.findValidInvitation(token, type);
+    if (!invitation)
+      throw new BadRequestException('O link é inválido, expirou ou já foi utilizado.');
+
+    const now = new Date();
+    const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
+    await this.prisma.$transaction(async (tx) => {
+      const consumed = await tx.userInvitation.updateMany({
+        where: {
+          id: invitation.id,
+          usedAt: null,
+          revokedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+      if (consumed.count !== 1) throw new BadRequestException('O link não está mais disponível.');
+      await tx.userInvitation.updateMany({
+        where: {
+          userId: invitation.userId,
+          id: { not: invitation.id },
+          usedAt: null,
+          revokedAt: null,
+        },
+        data: { revokedAt: now },
+      });
+      await tx.session.updateMany({
+        where: { userId: invitation.userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      await tx.user.update({
+        where: { id: invitation.userId },
+        data: {
+          passwordHash,
+          status: UserStatus.ACTIVE,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+        },
+      });
     });
 
     await this.audit.write({
-      organizationId: organization.id,
-      actorUserId: user.id,
-      actorEmail: user.email,
-      actorRole: user.role,
-      action: 'AUTH_REGISTER',
+      organizationId: invitation.organizationId,
+      actorUserId: invitation.userId,
+      actorEmail: invitation.user.email,
+      actorRole: invitation.user.role,
+      action:
+        type === InvitationType.ACCOUNT_ACTIVATION
+          ? 'AUTH_ACCOUNT_ACTIVATE'
+          : 'AUTH_PASSWORD_RESET',
       resourceType: 'USER',
-      resourceId: user.id,
+      resourceId: invitation.userId,
       result: AuditResult.SUCCESS,
       ...metadata,
     });
-
-    return { success: true, user };
+    return { success: true };
   }
 
   async login(email: string, password: string, metadata: AuthRequestMetadata) {
@@ -103,13 +141,15 @@ export class AuthService {
       throw new UnauthorizedException('Credenciais inválidas.');
     }
 
-    if (user.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException('Usuário desativado.');
-    }
+    if (user.status === UserStatus.INVITED)
+      throw new ForbiddenException('A conta ainda não foi ativada.');
+    if (user.status !== UserStatus.ACTIVE)
+      throw new ForbiddenException('O acesso está suspenso ou removido.');
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       throw new ForbiddenException('Acesso temporariamente bloqueado por tentativas inválidas.');
     }
 
+    if (!user.passwordHash) throw new ForbiddenException('A conta ainda não foi ativada.');
     const valid = await argon2.verify(user.passwordHash, password);
     if (!valid) {
       const maxAttempts = this.config.get<number>('LOGIN_MAX_ATTEMPTS', 5);
@@ -256,5 +296,23 @@ export class AuthService {
 
   private hashRefreshSecret(secret: string): string {
     return createHash('sha256').update(secret).digest('hex');
+  }
+
+  private findValidInvitation(token: string, type: InvitationType) {
+    const tokenHash = hashInvitationToken(token);
+    return this.prisma.userInvitation.findFirst({
+      where: {
+        tokenHash,
+        type,
+        usedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+        user: {
+          status:
+            type === InvitationType.ACCOUNT_ACTIVATION ? UserStatus.INVITED : UserStatus.ACTIVE,
+        },
+      },
+      include: { user: true },
+    });
   }
 }

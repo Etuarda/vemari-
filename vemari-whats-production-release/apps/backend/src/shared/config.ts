@@ -21,11 +21,10 @@ export const envSchema = z.object({
   DATA_ENCRYPTION_KEY_BASE64: z.string().min(43),
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
   LOGIN_LOCK_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
-  PUBLIC_REGISTRATION_ENABLED: z
-    .enum(['true', 'false'])
-    .default('true')
-    .transform((value) => value === 'true'),
-  META_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v25.0'),
+  META_GRAPH_API_VERSION: z
+    .string()
+    .regex(/^v\d+\.\d+$/)
+    .default('v25.0'),
   META_APP_ID: z.string().optional().default(''),
   META_APP_SECRET: z.string().optional().default(''),
   META_BUSINESS_ID: z.string().optional().default(''),

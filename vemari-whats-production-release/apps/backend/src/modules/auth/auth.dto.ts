@@ -9,15 +9,18 @@ export class LoginDto {
   password!: string;
 }
 
-export class RegisterDto {
+export class InvitationTokenDto {
   @IsString()
-  @MinLength(2)
-  name!: string;
+  @MinLength(32)
+  token!: string;
+}
 
-  @IsEmail()
-  email!: string;
-
+export class ActivateAccountDto extends InvitationTokenDto {
   @IsString()
   @MinLength(8)
   password!: string;
+
+  @IsString()
+  @MinLength(8)
+  passwordConfirmation!: string;
 }

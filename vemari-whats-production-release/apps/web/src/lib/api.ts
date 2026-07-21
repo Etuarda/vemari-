@@ -31,7 +31,11 @@ async function refreshAccessToken(): Promise<boolean> {
   return refreshPromise;
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  retry = true,
+): Promise<T> {
   const headers = new Headers(init.headers);
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
@@ -48,7 +52,9 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retry 
   }
 
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { message?: string | string[] } | null;
+    const body = (await response.json().catch(() => null)) as {
+      message?: string | string[];
+    } | null;
     const message = Array.isArray(body?.message) ? body.message.join(', ') : body?.message;
     throw new Error(message ?? `Erro HTTP ${response.status}`);
   }
@@ -66,17 +72,10 @@ export async function loginRequest(email: string, password: string) {
     body: JSON.stringify({ email, password }),
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { message?: string } | null;
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(body?.message ?? 'Não foi possível entrar.');
   }
   return response.json() as Promise<{ accessToken: string; user: AppUser }>;
-}
-
-export async function registerRequest(name: string, email: string, password: string) {
-  return apiRequest<{ success: true }>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ name, email, password }),
-  }, false);
 }
 
 export type AppUser = {

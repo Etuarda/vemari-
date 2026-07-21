@@ -16,17 +16,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const context = host.switchToHttp();
     const response = context.getResponse<FastifyReply>();
     const request = context.getRequest<FastifyRequest>();
+    const safePath = request.url.split('?')[0] ?? request.url;
     const status =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
     const exceptionResponse =
       exception instanceof HttpException ? exception.getResponse() : undefined;
 
     const message =
       typeof exceptionResponse === 'string'
         ? exceptionResponse
-        : typeof exceptionResponse === 'object' && exceptionResponse !== null && 'message' in exceptionResponse
+        : typeof exceptionResponse === 'object' &&
+            exceptionResponse !== null &&
+            'message' in exceptionResponse
           ? exceptionResponse.message
           : status === 500
             ? 'Erro interno do servidor.'
@@ -34,7 +35,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (status >= 500) {
       this.logger.error(
-        `${request.method} ${request.url}`,
+        `${request.method} ${safePath}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     }
@@ -43,7 +44,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       error: HttpStatus[status] ?? 'Error',
       message,
-      path: request.url,
+      path: safePath,
       requestId: request.id,
       timestamp: new Date().toISOString(),
     });

@@ -1,18 +1,10 @@
-import {
-  CallHandler,
-  ExecutionContext,
-  Injectable,
-  NestInterceptor,
-} from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuditResult, Role } from '@prisma/client';
 import type { FastifyRequest } from 'fastify';
 import { catchError, Observable, tap, throwError } from 'rxjs';
 import type { AuthenticatedUser } from '@vemari/contracts';
-import {
-  AUDIT_ACTION_KEY,
-  AuditActionMetadata,
-} from '../decorators/audit-action.decorator';
+import { AUDIT_ACTION_KEY, AuditActionMetadata } from '../decorators/audit-action.decorator';
 import { AuditService } from '../../modules/audit/audit.service';
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -23,6 +15,8 @@ const SENSITIVE_KEYS = new Set([
   'refreshToken',
   'accessToken',
   'token',
+  'activationUrl',
+  'resetUrl',
   'appSecret',
 ]);
 
@@ -46,15 +40,15 @@ export class AuditInterceptor implements NestInterceptor {
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     if (context.getType() !== 'http') return next.handle();
-    const request = context.switchToHttp().getRequest<
-      FastifyRequest & { user?: AuthenticatedUser }
-    >();
+    const request = context
+      .switchToHttp()
+      .getRequest<FastifyRequest & { user?: AuthenticatedUser }>();
     if (!MUTATING_METHODS.has(request.method)) return next.handle();
 
-    const metadata = this.reflector.getAllAndOverride<AuditActionMetadata>(
-      AUDIT_ACTION_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const metadata = this.reflector.getAllAndOverride<AuditActionMetadata>(AUDIT_ACTION_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
     const user = request.user;
     const organizationId = user?.organizationId;
     if (!organizationId) return next.handle();

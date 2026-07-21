@@ -28,6 +28,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
+    "auth:bootstrap-admin": "tsx infra/scripts/bootstrap-admin.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "audit:dependencies": "npm audit --audit-level=high"

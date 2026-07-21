@@ -132,7 +132,7 @@ Não faça commit do `.env`. Em produção, use secret manager do provedor ou se
 
 ## Banco e usuários
 
-O serviço `migrate` executa migrations e o seed. `SEED_USERS_JSON` deve conter senhas únicas. O seed cria usuários ausentes, mas não substitui senhas já existentes.
+O serviço `migrate` executa migrations e o seed estrutural. Em uma instalação nova, crie o primeiro administrador com `npm run auth:bootstrap-admin -- --email admin@vemari.com.br`; o comando retorna um link de ativação de uso único e não cria nem armazena senha no `.env`.
 
 ```bash
 docker compose run --rm migrate

@@ -1,10 +1,7 @@
 import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet from '@fastify/helmet';
@@ -20,6 +17,19 @@ async function bootstrap() {
       trustProxy: true,
       logger: {
         level: process.env.LOG_LEVEL ?? 'info',
+        serializers: {
+          req: (request: {
+            method?: string;
+            url?: string;
+            hostname?: string;
+            remoteAddress?: string;
+          }) => ({
+            method: request.method,
+            url: request.url?.split('?')[0],
+            hostname: request.hostname,
+            remoteAddress: request.remoteAddress,
+          }),
+        },
         redact: {
           paths: [
             'req.headers.authorization',
