@@ -12,7 +12,7 @@ export type MetaClientConfig = {
 };
 
 export type TemplateComponentParameter =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; parameter_name?: string }
   | { type: 'image'; image: { link: string } }
   | { type: 'document'; document: { link: string; filename?: string } };
 
@@ -40,6 +40,14 @@ export type MetaMessageResult = {
   waId?: string;
 };
 
+export type ProviderFailureCertainty = 'NOT_ACCEPTED' | 'AMBIGUOUS';
+
+export interface OutboundProvider {
+  readonly name: string;
+  sendTemplate(input: SendTemplateInput): Promise<MetaMessageResult>;
+  sendText(input: SendTextInput): Promise<MetaMessageResult>;
+}
+
 export class MetaApiError extends Error {
   constructor(
     message: string,
@@ -48,6 +56,7 @@ export class MetaApiError extends Error {
     public readonly subcode?: number,
     public readonly isTransient = false,
     public readonly details?: unknown,
+    public readonly failureCertainty: ProviderFailureCertainty = 'NOT_ACCEPTED',
   ) {
     super(message);
     this.name = 'MetaApiError';
@@ -83,6 +92,7 @@ export function verifyMetaSignature(
 }
 
 export class MetaWhatsAppClient {
+  readonly name = 'META_CLOUD_API';
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
 
@@ -94,10 +104,36 @@ export class MetaWhatsAppClient {
   isConfigured(): boolean {
     return Boolean(
       this.config.accessToken &&
-        this.config.appSecret &&
-        this.config.wabaId &&
-        this.config.phoneNumberId,
+      this.config.appSecret &&
+      this.config.wabaId &&
+      this.config.phoneNumberId,
     );
+  }
+
+  canManageTemplates(): boolean {
+    return Boolean(this.config.accessToken && this.config.wabaId);
+  }
+
+  async createTemplate(payload: unknown): Promise<unknown> {
+    if (!this.canManageTemplates()) {
+      throw new MetaApiError('WABA ou token da Meta não configurado.', 503);
+    }
+    return this.request(
+      `/${this.config.wabaId}/message_templates`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      true,
+    );
+  }
+
+  async updateTemplate(templateId: string, payload: unknown): Promise<unknown> {
+    return this.request(`/${templateId}`, { method: 'POST', body: JSON.stringify(payload) }, true);
+  }
+
+  async deleteTemplate(templateId: string): Promise<unknown> {
+    return this.request(`/${templateId}`, { method: 'DELETE' }, true);
   }
 
   async sendTemplate(input: SendTemplateInput): Promise<MetaMessageResult> {
@@ -152,8 +188,9 @@ export class MetaWhatsAppClient {
 
   async listTemplates(): Promise<unknown[]> {
     const result = await this.request<{ data?: unknown[] }>(
-      `/${this.config.wabaId}/message_templates?fields=id,name,status,category,language,components&limit=250`,
+      `/${this.config.wabaId}/message_templates?fields=id,name,status,category,language,parameter_format,components,quality_score,message_send_ttl_seconds,last_updated_time&limit=250`,
       { method: 'GET' },
+      true,
     );
     return result.data ?? [];
   }
@@ -165,16 +202,22 @@ export class MetaWhatsAppClient {
     );
   }
 
-  private async request<T>(path: string, init: RequestInit): Promise<T> {
-    if (!this.isConfigured()) {
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    templateManagementRequest = false,
+  ): Promise<T> {
+    if (templateManagementRequest ? !this.canManageTemplates() : !this.isConfigured()) {
       throw new MetaApiError('Integração Meta não configurada.', 503);
     }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const separator = path.includes('?') ? '&' : '?';
-    const appSecretProof = createAppSecretProof(this.config.accessToken, this.config.appSecret);
-    const url = `${this.baseUrl}${path}${separator}appsecret_proof=${appSecretProof}`;
+    const proofQuery = this.config.appSecret
+      ? `${separator}appsecret_proof=${createAppSecretProof(this.config.accessToken, this.config.appSecret)}`
+      : '';
+    const url = `${this.baseUrl}${path}${proofQuery}`;
 
     try {
       const response = await fetch(url, {
@@ -199,17 +242,42 @@ export class MetaWhatsAppClient {
             error.error_subcode,
             error.is_transient ?? response.status >= 500,
             error.error_data,
+            response.status >= 500 ? 'AMBIGUOUS' : 'NOT_ACCEPTED',
           );
         }
-        throw new MetaApiError(`Erro HTTP ${response.status} na Graph API.`, response.status, undefined, undefined, response.status >= 500, body);
+        throw new MetaApiError(
+          `Erro HTTP ${response.status} na Graph API.`,
+          response.status,
+          undefined,
+          undefined,
+          response.status >= 500 || response.status === 429,
+          body,
+          response.status >= 500 ? 'AMBIGUOUS' : 'NOT_ACCEPTED',
+        );
       }
       return body as T;
     } catch (error) {
       if (error instanceof MetaApiError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new MetaApiError('Tempo limite excedido ao chamar a Graph API.', 504, undefined, undefined, true);
+        throw new MetaApiError(
+          'Tempo limite excedido ao chamar a Graph API.',
+          504,
+          undefined,
+          undefined,
+          true,
+          undefined,
+          'AMBIGUOUS',
+        );
       }
-      throw new MetaApiError('Falha de comunicação com a Graph API.', 502, undefined, undefined, true, error);
+      throw new MetaApiError(
+        'Falha de comunicação com a Graph API.',
+        502,
+        undefined,
+        undefined,
+        true,
+        error,
+        'AMBIGUOUS',
+      );
     } finally {
       clearTimeout(timeout);
     }

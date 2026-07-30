@@ -1,8 +1,9 @@
-import { TemplateCategory, TemplateStatus } from '@prisma/client';
+import { TemplateCategory, TemplateOrigin, TemplateStatus } from '@prisma/client';
 
 export type CampaignTemplateInput = {
   status: TemplateStatus;
   category: TemplateCategory;
+  origin: TemplateOrigin;
 };
 
 export function validateCampaignTemplate(template: CampaignTemplateInput): string[] {
@@ -12,6 +13,9 @@ export function validateCampaignTemplate(template: CampaignTemplateInput): strin
   }
   if (template.category !== TemplateCategory.MARKETING) {
     errors.push('O MVP aceita apenas templates da categoria MARKETING em campanhas.');
+  }
+  if (template.origin !== TemplateOrigin.META) {
+    errors.push('Templates simulados não podem ser usados em envios reais.');
   }
   return errors;
 }

@@ -18,6 +18,9 @@ export enum Permission {
   SUPPRESSION_REMOVE = 'SUPPRESSION_REMOVE',
   TEMPLATE_READ = 'TEMPLATE_READ',
   TEMPLATE_SYNC = 'TEMPLATE_SYNC',
+  TEMPLATE_CREATE = 'TEMPLATE_CREATE',
+  TEMPLATE_UPDATE = 'TEMPLATE_UPDATE',
+  TEMPLATE_DELETE = 'TEMPLATE_DELETE',
   CAMPAIGN_READ = 'CAMPAIGN_READ',
   CAMPAIGN_CREATE = 'CAMPAIGN_CREATE',
   CAMPAIGN_SEND = 'CAMPAIGN_SEND',
@@ -41,6 +44,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     Permission.SUPPRESSION_READ,
     Permission.TEMPLATE_READ,
     Permission.TEMPLATE_SYNC,
+    Permission.TEMPLATE_CREATE,
+    Permission.TEMPLATE_UPDATE,
+    Permission.TEMPLATE_DELETE,
     Permission.CAMPAIGN_READ,
     Permission.CAMPAIGN_CREATE,
     Permission.CAMPAIGN_SEND,
@@ -121,7 +127,7 @@ export type CampaignDispatchJob = {
 export type OutboundTemplateJob = {
   kind: 'MARKETING_TEMPLATE';
   organizationId: string;
-  campaignRecipientId: string;
+  outboundAttemptId: string;
 };
 
 export type OutboundTextJob = {

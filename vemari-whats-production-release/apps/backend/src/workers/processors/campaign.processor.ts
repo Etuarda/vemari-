@@ -4,16 +4,16 @@ import {
   MessageDirection,
   MessageStatus,
   MessageType,
+  Prisma,
   RecipientStatus,
+  TemplateParameterFormat,
 } from '@prisma/client';
 import { Job, Queue } from 'bullmq';
-import {
-  CampaignDispatchJob,
-  OutboundJob,
-  QUEUE_NAMES,
-} from '@vemari/contracts';
+import { CampaignDispatchJob, OutboundJob, QUEUE_NAMES } from '@vemari/contracts';
 import { appConfig } from '../../shared/config';
 import { prisma, redis } from '../lib/runtime';
+
+const PROVIDER = 'META_CLOUD_API';
 
 export async function processCampaignDispatch(job: Job<CampaignDispatchJob>) {
   const run = await prisma.campaignRun.findFirst({
@@ -27,36 +27,26 @@ export async function processCampaignDispatch(job: Job<CampaignDispatchJob>) {
     take: appConfig.CAMPAIGN_BATCH_SIZE,
     orderBy: { createdAt: 'asc' },
   });
-  const outbound = new Queue<OutboundJob>(QUEUE_NAMES.WHATSAPP_OUTBOUND, { connection: redis });
 
   for (const recipient of recipients) {
-    const claimed = await prisma.campaignRecipient.updateMany({
-      where: { id: recipient.id, status: RecipientStatus.PENDING },
-      data: { status: RecipientStatus.QUEUED },
+    await createAttemptAndOutbox({
+      organizationId: job.data.organizationId,
+      campaignRunId: run.id,
+      recipientId: recipient.id,
+      contactId: recipient.contactId,
     });
-    if (claimed.count !== 1) continue;
-    await outbound.add(
-      'marketing-template',
-      {
-        kind: 'MARKETING_TEMPLATE',
-        organizationId: job.data.organizationId,
-        campaignRecipientId: recipient.id,
-      },
-      {
-        jobId: `recipient:${recipient.id}`,
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 1000 },
-        removeOnComplete: { age: 86_400, count: 50_000 },
-        removeOnFail: { age: 604_800, count: 50_000 },
-      },
-    );
   }
+
+  const outbound = new Queue<OutboundJob>(QUEUE_NAMES.WHATSAPP_OUTBOUND, { connection: redis });
+  await publishPendingOutbox(run.id, outbound);
 
   const pending = await prisma.campaignRecipient.count({
     where: { campaignRunId: run.id, status: RecipientStatus.PENDING },
   });
   if (pending > 0) {
-    const dispatchQueue = new Queue<CampaignDispatchJob>(QUEUE_NAMES.CAMPAIGN_DISPATCH, { connection: redis });
+    const dispatchQueue = new Queue<CampaignDispatchJob>(QUEUE_NAMES.CAMPAIGN_DISPATCH, {
+      connection: redis,
+    });
     await dispatchQueue.add('dispatch', job.data, {
       jobId: `dispatch:${run.id}:${Date.now()}`,
       delay: 250,
@@ -65,58 +55,126 @@ export async function processCampaignDispatch(job: Job<CampaignDispatchJob>) {
       removeOnComplete: true,
     });
     await dispatchQueue.close();
-  } else {
-    const open = await prisma.campaignRecipient.count({
-      where: {
-        campaignRunId: run.id,
-        status: { in: [RecipientStatus.PENDING, RecipientStatus.QUEUED] },
-      },
-    });
-    if (open === 0) {
-      await prisma.$transaction([
-        prisma.campaignRun.update({
-          where: { id: run.id },
-          data: { status: CampaignRunStatus.COMPLETED, completedAt: new Date() },
-        }),
-        prisma.campaign.update({
-          where: { id: run.campaignId },
-          data: { status: CampaignStatus.COMPLETED },
-        }),
-      ]);
-    }
   }
   await outbound.close();
 }
 
-export function resolveText(value: string, contact: { name: string; phoneE164: string; email: string | null }): string {
+async function createAttemptAndOutbox(input: {
+  organizationId: string;
+  campaignRunId: string;
+  recipientId: string;
+  contactId: string;
+}) {
+  await prisma.$transaction(async (tx) => {
+    const claimed = await tx.campaignRecipient.updateMany({
+      where: { id: input.recipientId, status: RecipientStatus.PENDING },
+      data: { status: RecipientStatus.QUEUED },
+    });
+    if (claimed.count !== 1) return;
+
+    const attempt = await tx.outboundAttempt.create({
+      data: {
+        organizationId: input.organizationId,
+        campaignRunId: input.campaignRunId,
+        campaignRecipientId: input.recipientId,
+        contactId: input.contactId,
+        provider: PROVIDER,
+      },
+    });
+    await tx.outboxEvent.create({
+      data: {
+        organizationId: input.organizationId,
+        outboundAttemptId: attempt.id,
+        topic: QUEUE_NAMES.WHATSAPP_OUTBOUND,
+        payload: {
+          kind: 'MARKETING_TEMPLATE',
+          organizationId: input.organizationId,
+          outboundAttemptId: attempt.id,
+        },
+      },
+    });
+  });
+}
+
+async function publishPendingOutbox(campaignRunId: string, outbound: Queue<OutboundJob>) {
+  const events = await prisma.outboxEvent.findMany({
+    where: { publishedAt: null, outboundAttempt: { campaignRunId } },
+    orderBy: { createdAt: 'asc' },
+  });
+  for (const event of events) {
+    const payload = event.payload as OutboundJob;
+    if (payload.kind !== 'MARKETING_TEMPLATE') continue;
+    await outbound.add('marketing-template', payload, {
+      jobId: `outbound:${event.outboundAttemptId}`,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 1000 },
+      removeOnComplete: { age: 86_400, count: 50_000 },
+      removeOnFail: { age: 604_800, count: 50_000 },
+    });
+    await prisma.outboxEvent.updateMany({
+      where: { id: event.id, publishedAt: null },
+      data: { publishedAt: new Date() },
+    });
+  }
+}
+
+export function resolveText(
+  value: string,
+  contact: { name: string; phoneE164: string; email: string | null },
+): string {
   return value
     .replaceAll('{{contact.name}}', contact.name)
     .replaceAll('{{contact.phone}}', contact.phoneE164)
     .replaceAll('{{contact.email}}', contact.email ?? '');
 }
 
-export function buildTemplateComponents(parameters: unknown, contact: { name: string; phoneE164: string; email: string | null }) {
+export function buildTemplateComponents(
+  parameters: unknown,
+  contact: { name: string; phoneE164: string; email: string | null },
+  parameterFormat: TemplateParameterFormat = TemplateParameterFormat.POSITIONAL,
+) {
   if (!parameters || typeof parameters !== 'object') return undefined;
   const input = parameters as Record<string, unknown>;
-  const components: Array<{ type: 'header' | 'body'; parameters: Array<{ type: 'text'; text: string }> }> = [];
+  const components: Array<{
+    type: 'header' | 'body';
+    parameters: Array<{ type: 'text'; text: string; parameter_name?: string }>;
+  }> = [];
   for (const type of ['header', 'body'] as const) {
     const values = input[type];
-    if (Array.isArray(values) && values.length) {
+    if (
+      parameterFormat === TemplateParameterFormat.NAMED &&
+      values &&
+      typeof values === 'object' &&
+      !Array.isArray(values)
+    ) {
+      const named = Object.entries(values as Record<string, unknown>);
+      if (!named.length) continue;
       components.push({
         type,
-        parameters: values.map((value) => ({ type: 'text', text: resolveText(String(value), contact) })),
+        parameters: named.map(([parameter_name, value]) => ({
+          type: 'text',
+          parameter_name,
+          text: resolveText(String(value), contact),
+        })),
+      });
+    } else if (Array.isArray(values) && values.length) {
+      components.push({
+        type,
+        parameters: values.map((value) => ({
+          type: 'text',
+          text: resolveText(String(value), contact),
+        })),
       });
     }
   }
   return components.length ? components : undefined;
 }
 
-export async function ensureCampaignConversation(input: {
-  organizationId: string;
-  contactId: string;
-  campaignId: string;
-}) {
-  const existing = await prisma.conversation.findFirst({
+export async function ensureCampaignConversation(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; contactId: string; campaignId: string },
+) {
+  const existing = await tx.conversation.findFirst({
     where: {
       organizationId: input.organizationId,
       contactId: input.contactId,
@@ -125,7 +183,7 @@ export async function ensureCampaignConversation(input: {
     orderBy: { createdAt: 'desc' },
   });
   if (existing) return existing;
-  return prisma.conversation.create({
+  return tx.conversation.create({
     data: {
       organizationId: input.organizationId,
       contactId: input.contactId,
@@ -135,30 +193,54 @@ export async function ensureCampaignConversation(input: {
   });
 }
 
-export async function createCampaignMessage(input: {
-  organizationId: string;
-  recipientId: string;
-  contactId: string;
-  campaignId: string;
-  metaMessageId: string;
-}) {
-  const conversation = await ensureCampaignConversation(input);
-  const message = await prisma.message.create({
+export async function createCampaignMessage(
+  tx: Prisma.TransactionClient,
+  input: {
+    organizationId: string;
+    outboundAttemptId: string;
+    recipientId: string;
+    contactId: string;
+    campaignId: string;
+    providerMessageId: string;
+  },
+) {
+  const conversation = await ensureCampaignConversation(tx, input);
+  const message = await tx.message.create({
     data: {
       organizationId: input.organizationId,
       conversationId: conversation.id,
       contactId: input.contactId,
       campaignRecipientId: input.recipientId,
-      metaMessageId: input.metaMessageId,
+      outboundAttemptId: input.outboundAttemptId,
+      metaMessageId: input.providerMessageId,
       direction: MessageDirection.OUTBOUND,
       type: MessageType.TEMPLATE,
       status: MessageStatus.SUBMITTED,
       submittedAt: new Date(),
     },
   });
-  await prisma.conversation.update({
+  await tx.conversation.update({
     where: { id: conversation.id },
     data: { lastMessageAt: message.createdAt },
   });
   return message;
+}
+
+export async function completeRunIfSettled(tx: Prisma.TransactionClient, runId: string) {
+  const open = await tx.campaignRecipient.count({
+    where: {
+      campaignRunId: runId,
+      status: { in: [RecipientStatus.PENDING, RecipientStatus.QUEUED] },
+    },
+  });
+  if (open !== 0) return;
+  const run = await tx.campaignRun.findUniqueOrThrow({ where: { id: runId } });
+  await tx.campaignRun.update({
+    where: { id: runId },
+    data: { status: CampaignRunStatus.COMPLETED, completedAt: new Date() },
+  });
+  await tx.campaign.update({
+    where: { id: run.campaignId },
+    data: { status: CampaignStatus.COMPLETED },
+  });
 }

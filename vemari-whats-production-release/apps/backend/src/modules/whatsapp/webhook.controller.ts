@@ -68,16 +68,24 @@ export class WebhookController {
     const existing = await this.prisma.webhookEvent.findUnique({ where: { eventKey } });
     if (existing) return { received: true, duplicate: true };
 
-    const event = await this.prisma.webhookEvent.create({
-      data: {
-        organizationId: organization.id,
-        provider: 'META_WHATSAPP',
-        eventKey,
-        payload: request.body as Prisma.InputJsonValue,
-        signatureValid: true,
-        status: WebhookStatus.RECEIVED,
-      },
-    });
+    let event;
+    try {
+      event = await this.prisma.webhookEvent.create({
+        data: {
+          organizationId: organization.id,
+          provider: 'META_WHATSAPP',
+          eventKey,
+          payload: request.body as Prisma.InputJsonValue,
+          signatureValid: true,
+          status: WebhookStatus.RECEIVED,
+        },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        return { received: true, duplicate: true };
+      }
+      throw error;
+    }
 
     await this.queues.whatsappWebhook.add(
       'process',
