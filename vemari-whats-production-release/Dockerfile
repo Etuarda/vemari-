@@ -25,7 +25,7 @@ COPY --from=node-build --chown=app:app /app/node_modules ./node_modules
 COPY --from=node-build --chown=app:app /app/dist/backend ./dist/backend
 COPY --from=node-build --chown=app:app /app/prisma ./prisma
 USER app
-CMD ["npm", "run", "start:api"]
+CMD ["node", "dist/backend/main-api.js"]
 
 FROM dependencies AS web-build
 COPY apps/web apps/web

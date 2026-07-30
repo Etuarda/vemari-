@@ -55,7 +55,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: node-runtime
-    command: ["npm", "run", "start:api"]
+    command: ["node", "dist/backend/main-api.js"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
@@ -84,7 +84,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: node-runtime
-    command: ["npm", "run", "start:worker"]
+    command: ["node", "dist/backend/main-worker.js"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public

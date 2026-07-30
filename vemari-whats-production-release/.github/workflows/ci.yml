@@ -56,5 +56,5 @@ jobs:
       - run: npm audit --audit-level=high
       - name: Build containers
         run: |
-          docker build -f infra/docker/Dockerfile.node -t vemari-node:${{ github.sha }} .
-          docker build -f infra/docker/Dockerfile.web -t vemari-web:${{ github.sha }} .
+          docker build --target node-runtime -t vemari-node:${{ github.sha }} .
+          docker build --target web-runtime -t vemari-web:${{ github.sha }} .

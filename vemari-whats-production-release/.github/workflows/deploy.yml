@@ -9,10 +9,10 @@ on:
 permissions:
   contents: read
 
-environment: production
 jobs:
   deployment-gate:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Deployment is infrastructure-specific
         run: |
